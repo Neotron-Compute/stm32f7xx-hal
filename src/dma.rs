@@ -226,29 +226,21 @@ where
         interrupts: Interrupts,
     ) {
         handle.dma.st[T::Stream::number()].cr.modify(|_, w| {
-            let w = if interrupts.transfer_complete {
-                w.tcie().enabled()
-            } else {
-                w
-            };
+            if interrupts.transfer_complete {
+                w.tcie().enabled();
+            }
 
-            let w = if interrupts.half_transfer {
-                w.htie().enabled()
-            } else {
-                w
-            };
+            if interrupts.half_transfer {
+                w.htie().enabled();
+            }
 
-            let w = if interrupts.transfer_error {
-                w.teie().enabled()
-            } else {
-                w
-            };
+            if interrupts.transfer_error {
+                w.teie().enabled();
+            }
 
-            let w = if interrupts.direct_mode_error {
-                w.dmeie().enabled()
-            } else {
-                w
-            };
+            if interrupts.direct_mode_error {
+                w.dmeie().enabled();
+            }
 
             w
         });
@@ -549,7 +541,7 @@ impl_stream!(
 /// This is an internal trait. End users neither need to implement it, nor use
 /// it directly.
 pub trait Channel {
-    fn select<'r>(w: &'r mut dma2::st::cr::W) -> &'r mut dma2::st::cr::W;
+    fn select(w: &mut dma2::st::cr::W) -> &mut dma2::st::cr::W;
 }
 
 macro_rules! impl_channel {
@@ -558,8 +550,8 @@ macro_rules! impl_channel {
             pub struct $name;
 
             impl Channel for $name {
-                fn select<'r>(w: &'r mut dma2::st::cr::W)
-                    -> &'r mut dma2::st::cr::W
+                fn select(w: &mut dma2::st::cr::W)
+                    -> &mut dma2::st::cr::W
                 {
                     // This is safe, as long as the macro caller passes in valid
                     // channel numbers.
