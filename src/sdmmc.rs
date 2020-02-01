@@ -43,6 +43,7 @@ where
 
     /// Initialize the SDMMC peripheral
     pub fn enable(self, _rcc: &mut Rcc) -> Sdmmc<I, P, Enabled> {
+        // TODO enable the peripheral here
         Sdmmc {
             sdmmc: self.sdmmc,
             pins: self.pins,
@@ -64,8 +65,8 @@ where
     ///
     /// Please note that the word "transfer" is used with two different meanings
     /// here:
-    /// - An SDMMC transfer, as in an SDMMC transaction that involves both sending
-    ///   and receiving data. The method name refers to this kind of transfer.
+    /// - An SDMMC transfer, as in an SDMMC transaction that involves either sending
+    ///   or receiving data. The method name refers to this kind of transfer.
     /// - A DMA transfer, as in an ongoing DMA operation. The name of the return
     ///   type refers to this kind of transfer.
     ///
@@ -76,16 +77,13 @@ where
     /// would be nice to simplify that, but I believe that requires an equality
     /// constraint in the where clause, which is not supported yet by the
     /// compiler.
-    pub fn transfer_all<B>(
+    pub fn transfer_out<B>(
         self,
         buffer: Pin<B>,
-        dma_rx: &dma::Handle<<Rx<I> as dma::Target>::Instance, state::Enabled>,
         dma_tx: &dma::Handle<<Tx<I> as dma::Target>::Instance, state::Enabled>,
-        rx: <Rx<I> as dma::Target>::Stream,
         tx: <Tx<I> as dma::Target>::Stream,
-    ) -> Transfer<I, P, B, Rx<I>, Tx<I>, dma::Ready>
+    ) -> TransferOut<I, P, B, Tx<I>, dma::Ready>
     where
-        Rx<I>: dma::Target,
         Tx<I>: dma::Target,
         B: DerefMut + 'static,
         B::Target: AsMutSlice<Element = u8>,
@@ -98,10 +96,83 @@ where
         // have access to `self`, moving `self` into the `Transfer` while they
         // are in use, and dropping them when returning `self` from the
         // transfer.
-        let rx_token = Rx(PhantomData);
         let tx_token = Tx(PhantomData);
 
-        // We need to move a buffer into each of the `dma::Transfer` instances,
+        // We need to move a buffer into the `dma::Transfer` instance,
+        // while keeping the original buffer around to return to the caller
+        // later, when the transfer is finished.
+        let tx_buffer = dma::PtrBuffer {
+            ptr: buffer.as_slice().as_ptr(),
+            len: buffer.as_slice().len(),
+        };
+
+        // Create the DMA transfer. This is safe, for the following
+        // reasons:
+        // 1. The trait bounds on this method guarantee that `buffer`, which we
+        //    created the two buffer instances from, can be safely read from and
+        //    written to.
+        // 2. The semantics of the SDMMC peripheral guarantee that the buffer
+        //    reads/writes are synchronized, preventing race conditions.
+        let tx_transfer = unsafe {
+            dma::Transfer::new(
+                dma_tx,
+                tx,
+                Pin::new(tx_buffer),
+                tx_token,
+                self.sdmmc.fifo_address(),
+                dma::Direction::MemoryToPeripheral,
+            )
+        };
+
+        TransferOut {
+            buffer,
+            target: self,
+            tx: tx_transfer,
+            _state: dma::Ready,
+        }
+    }
+
+    /// Start an SDMMC transfer using DMA
+    ///
+    /// Reads data into the `buffer`. Returns a [`Transfer`], to represent the ongoing SDMMC
+    /// transfer.
+    ///
+    /// Please note that the word "transfer" is used with two different meanings
+    /// here:
+    /// - An SDMMC transfer, as in an SDMMC transaction that involves either sending
+    ///   or receiving data. The method name refers to this kind of transfer.
+    /// - A DMA transfer, as in an ongoing DMA operation. The name of the return
+    ///   type refers to this kind of transfer.
+    ///
+    /// This method, as well as all other DMA-related methods in this module,
+    /// requires references to two DMA handles, one each for the RX and TX
+    /// streams. This will actually always be the same handle, as each SDMMC
+    /// instance uses the same DMA instance for both sending and receiving. It
+    /// would be nice to simplify that, but I believe that requires an equality
+    /// constraint in the where clause, which is not supported yet by the
+    /// compiler.
+    pub fn transfer_in<B>(
+        self,
+        buffer: Pin<B>,
+        dma_rx: &dma::Handle<<Rx<I> as dma::Target>::Instance, state::Enabled>,
+        rx: <Rx<I> as dma::Target>::Stream,
+    ) -> TransferIn<I, P, B, Rx<I>, dma::Ready>
+    where
+        Rx<I>: dma::Target,
+        B: DerefMut + 'static,
+        B::Target: AsMutSlice<Element = u8>,
+    {
+        // Create the RX/TX tokens for the transfer. Those must only exist once,
+        // otherwise it would be possible to create multiple transfers trying to
+        // use the same hardware resources.
+        //
+        // We guarantee that they only exist once by only creating them where we
+        // have access to `self`, moving `self` into the `Transfer` while they
+        // are in use, and dropping them when returning `self` from the
+        // transfer.
+        let rx_token = Rx(PhantomData);
+
+        // We need to move a buffer into the `dma::Transfer` instance,
         // while keeping the original buffer around to return to the caller
         // later, when the transfer is finished.
         //
@@ -110,12 +181,8 @@ where
             ptr: buffer.as_slice().as_ptr(),
             len: buffer.as_slice().len(),
         };
-        let tx_buffer = dma::PtrBuffer {
-            ptr: buffer.as_slice().as_ptr(),
-            len: buffer.as_slice().len(),
-        };
 
-        // Create the two DMA transfers. This is safe, for the following
+        // Create the DMA transfer. This is safe, for the following
         // reasons:
         // 1. The trait bounds on this method guarantee that `buffer`, which we
         //    created the two buffer instances from, can be safely read from and
@@ -132,24 +199,11 @@ where
                 dma::Direction::PeripheralToMemory,
             )
         };
-        let tx_transfer = unsafe {
-            dma::Transfer::new(
-                dma_tx,
-                tx,
-                Pin::new(tx_buffer),
-                tx_token,
-                self.sdmmc.fifo_address(),
-                dma::Direction::MemoryToPeripheral,
-            )
-        };
 
-        Transfer {
+        TransferIn {
             buffer,
             target: self,
-
             rx: rx_transfer,
-            tx: tx_transfer,
-
             _state: dma::Ready,
         }
     }
@@ -273,22 +327,24 @@ pub struct Rx<I>(PhantomData<I>);
 /// TX token used for DMA transfers
 pub struct Tx<I>(PhantomData<I>);
 
-/// A DMA transfer of the SDMMC peripheral
-///
-/// Since DMA can send and receive at the same time, using two DMA transfers and
-/// two DMA streams, we need this type to represent this operation and wrap the
-/// underlying [`dma::Transfer`] instances.
-pub struct Transfer<I, P, Buffer, Rx: dma::Target, Tx: dma::Target, State> {
+/// A DMA transfer to the SDMMC peripheral / SDMMC card.
+pub struct TransferOut<I, P, Buffer, Tx: dma::Target, State> {
     buffer: Pin<Buffer>,
     target: Sdmmc<I, P, Enabled>,
-    rx: dma::Transfer<Rx, dma::PtrBuffer<u8>, State>,
     tx: dma::Transfer<Tx, dma::PtrBuffer<u8>, State>,
     _state: State,
 }
 
-impl<I, P, Buffer, Rx, Tx> Transfer<I, P, Buffer, Rx, Tx, dma::Ready>
+/// A DMA transfer from the SDMMC peripheral / SDMMC card.
+pub struct TransferIn<I, P, Buffer, Rx: dma::Target, State> {
+    buffer: Pin<Buffer>,
+    target: Sdmmc<I, P, Enabled>,
+    rx: dma::Transfer<Rx, dma::PtrBuffer<u8>, State>,
+    _state: State,
+}
+
+impl<I, P, Buffer, Tx> TransferOut<I, P, Buffer, Tx, dma::Ready>
 where
-    Rx: dma::Target,
     Tx: dma::Target,
 {
     /// Enables the given interrupts for this DMA transfer
@@ -298,11 +354,9 @@ where
     /// DMA streams.
     pub fn enable_interrupts(
         &mut self,
-        rx_handle: &dma::Handle<Rx::Instance, state::Enabled>,
         tx_handle: &dma::Handle<Tx::Instance, state::Enabled>,
         interrupts: dma::Interrupts,
     ) {
-        self.rx.enable_interrupts(rx_handle, interrupts);
         self.tx.enable_interrupts(tx_handle, interrupts);
     }
 
@@ -312,93 +366,64 @@ where
     /// its type state set to indicate the transfer has been started.
     pub fn start(
         self,
-        rx_handle: &dma::Handle<Rx::Instance, state::Enabled>,
         tx_handle: &dma::Handle<Tx::Instance, state::Enabled>,
-    ) -> Transfer<I, P, Buffer, Rx, Tx, dma::Started> {
-        Transfer {
+    ) -> TransferOut<I, P, Buffer, Tx, dma::Started> {
+        TransferOut {
             buffer: self.buffer,
             target: self.target,
-            rx: self.rx.start(rx_handle),
             tx: self.tx.start(tx_handle),
             _state: dma::Started,
         }
     }
 }
 
-impl<I, P, Buffer, Rx, Tx> Transfer<I, P, Buffer, Rx, Tx, dma::Started>
+impl<I, P, Buffer, Rx> TransferIn<I, P, Buffer, Rx, dma::Ready>
 where
     Rx: dma::Target,
-    Tx: dma::Target,
 {
-    /// Checks whether the transfer is still ongoing
-    pub fn is_active(
-        &self,
+    /// Enables the given interrupts for this DMA transfer
+    ///
+    /// These interrupts are only enabled for this transfer. The settings
+    /// doesn't affect other transfers, nor subsequent transfers using the same
+    /// DMA streams.
+    pub fn enable_interrupts(
+        &mut self,
         rx_handle: &dma::Handle<Rx::Instance, state::Enabled>,
-        tx_handle: &dma::Handle<Tx::Instance, state::Enabled>,
-    ) -> bool {
-        self.rx.is_active(rx_handle) || self.tx.is_active(tx_handle)
+        interrupts: dma::Interrupts,
+    ) {
+        self.rx.enable_interrupts(rx_handle, interrupts);
     }
 
-    /// Waits for the transfer to end
+    /// Start the DMA transfer
     ///
-    /// This method will block if the transfer is still ongoing. If you want
-    /// this method to return immediately, first check whether the transfer is
-    /// still ongoing by calling `is_active`.
-    ///
-    /// An ongoing transfer needs exlusive access to some resources, namely the
-    /// data buffer, the DMA stream, and the peripheral. Those have been moved
-    /// into the `Transfer` instance to prevent concurrent access to them. This
-    /// method returns those resources, so they can be used again.
-    pub fn wait(
+    /// Consumes this instance of `Transfer` and returns another instance with
+    /// its type state set to indicate the transfer has been started.
+    pub fn start(
         self,
         rx_handle: &dma::Handle<Rx::Instance, state::Enabled>,
-        tx_handle: &dma::Handle<Tx::Instance, state::Enabled>,
-    ) -> Result<
-        TransferResources<I, P, Rx, Tx, Buffer>,
-        (TransferResources<I, P, Rx, Tx, Buffer>, dma::Error),
-    > {
-        let (rx_res, rx_err) = match self.rx.wait(rx_handle) {
-            Ok(res) => (res, None),
-            Err((res, err)) => (res, Some(err)),
-        };
-        let (tx_res, tx_err) = match self.tx.wait(tx_handle) {
-            Ok(res) => (res, None),
-            Err((res, err)) => (res, Some(err)),
-        };
-
-        let res = TransferResources {
-            rx_stream: rx_res.stream,
-            tx_stream: tx_res.stream,
-            target: self.target,
+    ) -> TransferIn<I, P, Buffer, Rx, dma::Started> {
+        TransferIn {
             buffer: self.buffer,
-        };
-
-        if let Some(err) = rx_err {
-            return Err((res, err));
+            target: self.target,
+            rx: self.rx.start(rx_handle),
+            _state: dma::Started,
         }
-        if let Some(err) = tx_err {
-            return Err((res, err));
-        }
-
-        Ok(res)
     }
 }
 
 /// The resources that an ongoing transfer needs exclusive access to
-pub struct TransferResources<I, P, Rx: dma::Target, Tx: dma::Target, Buffer> {
-    pub rx_stream: Rx::Stream,
-    pub tx_stream: Tx::Stream,
+pub struct TransferResources<I, P, TRG: dma::Target, BUF> {
+    pub stream: TRG::Stream,
     pub target: Sdmmc<I, P, Enabled>,
-    pub buffer: Pin<Buffer>,
+    pub buffer: Pin<BUF>,
 }
 
 // As `TransferResources` is used in the error variant of `Result`, it needs a
 // `Debug` implementation to enable stuff like `unwrap` and `expect`. This can't
 // be derived without putting requirements on the type arguments.
-impl<I, P, Rx, Tx, Buffer> core::fmt::Debug for TransferResources<I, P, Rx, Tx, Buffer>
+impl<I, P, TRG, BUF> core::fmt::Debug for TransferResources<I, P, TRG, BUF>
 where
-    Rx: dma::Target,
-    Tx: dma::Target,
+    TRG: dma::Target,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "TransferResources {{ .. }}")
