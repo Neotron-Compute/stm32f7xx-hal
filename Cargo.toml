@@ -20,6 +20,7 @@ cortex-m = "0.6.0"
 cortex-m-rt = "0.6.8"
 nb = "0.1.2"
 stm32f7 = "0.9.0"
+embedded-sdmmc = { path = "../../embedded-sdmmc-rs" }
 
 [dependencies.bare-metal]
 version = "0.2.4"
@@ -43,6 +44,8 @@ panic-halt = "0.2.0"
 panic-semihosting = "0.5.2"
 
 [features]
+# TODO: Remove this line before committing
+default=["stm32f746"]
 rt = ["stm32f7/rt"]
 stm32f722 = ["stm32f7/stm32f7x2"]
 stm32f723 = ["stm32f7/stm32f7x3"]
