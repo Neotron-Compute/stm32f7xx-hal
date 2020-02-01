@@ -15,7 +15,7 @@ use crate::time::U32Ext;
 use nb::block;
 
 #[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
-use crate::device::{RCC, USART1, USART2, UART4, USART3, USART6, UART7};
+use crate::device::{RCC, UART4, UART7, USART1, USART2, USART3, USART6};
 
 #[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
 use crate::gpio::{
@@ -23,9 +23,9 @@ use crate::gpio::{
     gpiob::{PB10, PB11, PB6, PB7},
     gpioc::{PC10, PC11, PC6, PC7},
     gpiod::{PD5, PD6, PD8, PD9},
-    gpiog::{PG14, PG9},
     gpioe::{PE7, PE8},
     gpiof::{PF6, PF7},
+    gpiog::{PG14, PG9},
     Alternate, AF7, AF8,
 };
 
