@@ -1,31 +1,32 @@
 use core::fmt;
 use core::marker::PhantomData;
-use core::ops::{Deref, DerefMut};
+use core::ops::Deref;
+use core::ops::DerefMut;
 use core::pin::Pin;
 use core::ptr;
 
 use as_slice::{AsMutSlice, AsSlice};
 
-use crate::device;
 use crate::dma;
 use crate::hal::prelude::*;
 use crate::hal::serial;
+use crate::pac;
 use crate::state;
 use crate::time::U32Ext;
 use nb::block;
 
-#[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
-use crate::device::{RCC, USART1, USART2, UART4, USART3, USART6, UART7};
+#[cfg(any(feature = "device-selected",))]
+use crate::pac::{RCC, UART4, UART7, USART1, USART2, USART3, USART6};
 
-#[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
+#[cfg(any(feature = "device-selected",))]
 use crate::gpio::{
     gpioa::{PA0, PA1, PA10, PA2, PA3, PA9},
     gpiob::{PB10, PB11, PB6, PB7},
     gpioc::{PC10, PC11, PC6, PC7},
     gpiod::{PD5, PD6, PD8, PD9},
-    gpiog::{PG14, PG9},
     gpioe::{PE7, PE8},
     gpiof::{PF6, PF7},
+    gpiog::{PG14, PG9},
     Alternate, AF7, AF8,
 };
 
@@ -58,7 +59,7 @@ where
 {
 }
 
-#[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
+#[cfg(any(feature = "device-selected",))]
 impl PinTx<USART1> for PA9<Alternate<AF7>> {}
 impl PinTx<USART1> for PB6<Alternate<AF7>> {}
 impl PinTx<USART2> for PA2<Alternate<AF7>> {}
@@ -73,7 +74,7 @@ impl PinTx<USART6> for PG14<Alternate<AF8>> {}
 impl PinTx<UART7> for PE8<Alternate<AF8>> {}
 impl PinTx<UART7> for PF7<Alternate<AF8>> {}
 
-#[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
+#[cfg(any(feature = "device-selected",))]
 impl PinRx<USART1> for PA10<Alternate<AF7>> {}
 impl PinRx<USART1> for PB7<Alternate<AF7>> {}
 impl PinRx<USART2> for PA3<Alternate<AF7>> {}
@@ -402,10 +403,10 @@ pub enum Event {
 }
 
 /// Implemented by all USART instances
-pub trait Instance: Deref<Target = device::usart1::RegisterBlock> {
-    fn ptr() -> *const device::usart1::RegisterBlock;
-    fn select_sysclock(rcc: &device::rcc::RegisterBlock);
-    fn enable_clock(rcc: &device::rcc::RegisterBlock);
+pub trait Instance: Deref<Target = pac::usart1::RegisterBlock> {
+    fn ptr() -> *const pac::usart1::RegisterBlock;
+    fn select_sysclock(rcc: &pac::rcc::RegisterBlock);
+    fn enable_clock(rcc: &pac::rcc::RegisterBlock);
 }
 
 macro_rules! impl_instance {
@@ -414,15 +415,15 @@ macro_rules! impl_instance {
     )+) => {
         $(
             impl Instance for $USARTX {
-                fn ptr() -> *const device::usart1::RegisterBlock {
+                fn ptr() -> *const pac::usart1::RegisterBlock {
                     $USARTX::ptr()
                 }
 
-                fn select_sysclock(rcc: &device::rcc::RegisterBlock) {
+                fn select_sysclock(rcc: &pac::rcc::RegisterBlock) {
                     rcc.dckcfgr2.modify(|_, w| w.$usartXsel().bits(1));
                 }
 
-                fn enable_clock(rcc: &device::rcc::RegisterBlock) {
+                fn enable_clock(rcc: &pac::rcc::RegisterBlock) {
                     rcc.$apbXenr.modify(|_, w| w.$usartXen().set_bit());
                 }
             }
@@ -430,7 +431,7 @@ macro_rules! impl_instance {
     }
 }
 
-#[cfg(any(feature = "stm32f745", feature = "stm32f746",))]
+#[cfg(any(feature = "device-selected",))]
 impl_instance! {
     USART1: (apb2enr, usart1sel, usart1en),
     USART2: (apb1enr, usart2sel, usart2en),
